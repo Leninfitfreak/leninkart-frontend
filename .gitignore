@@ -1,0 +1,11 @@
+.env
+*.pem
+*.key
+*.crt
+*.log
+node_modules
+target
+__pycache__
+.idea
+.vscode
+*.bak
