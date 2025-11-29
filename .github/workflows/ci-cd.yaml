@@ -1,97 +1,114 @@
-name: CI/CD for frontend (dev → staging → prod)
+name: Deploy Frontend to GCP
 
 on:
   push:
     branches:
-      - dev
-      - staging
-      - main
-
-permissions:
-  contents: write
-  id-token: write
+      - main               # change to your default branch if different
+  workflow_dispatch:       # allows manual trigger
 
 env:
   SERVICE_NAME: frontend
+  IMAGE_NAME: frontend
+  GCP_PROJECT: leninkart-478305
+  ARTIFACT_REPO: leninkart
   REGION: asia-south1
-
-  # Repo + Branch
   INFRA_REPO: leninkart-infra
-  INFRA_BRANCH: main
-
-  # Helm paths (correct for your repo)
-  CHART_PATH: helm/frontend
-  VALUES_FILE: helm/frontend/values.yaml
-
-  # Secret variable names (unchanged)
-  SECRET_GCP_SA: GCP_SA_KEY
-  SECRET_PROJECT: GCP_PROJECT
-  SECRET_ARTIFACT_REPO: ARTIFACT_REPO
-  SECRET_INFRA_PAT: INFRA_PAT
+  INFRA_BRANCH: ${{ vars.INFRA_BRANCH || 'main' }}   # fallback to main if var not set
 
 jobs:
-
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
-
-    outputs:
-      image_tag: ${{ steps.export.outputs.image_tag }}
-      image_full: ${{ steps.export.outputs.image_full }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
 
     steps:
-      - name: Checkout source
+      - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Authenticate to GCP
+      # ------------------- Build & Push Docker Image -------------------
+      - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets[env.SECRET_GCP_SA] }}
+          workload_identity_provider: 'projects/${{ secrets.GCP_PROJECT }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: '${{ secrets.GCP_SA_KEY }}@leninkart-478305.iam.gserviceaccount.com'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-
-      - name: Build Docker Image
         run: |
-          TAG="${{ github.sha }}"
-          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ secrets[env.SECRET_PROJECT] }}/${{ secrets[env.SECRET_ARTIFACT_REPO] }}/${{ env.SERVICE_NAME }}:${TAG}"
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-          docker build -t "$IMAGE" .
-
-      - name: Push Docker Image
-        run: docker push "$IMAGE"
-
-      - name: Export Image Output
-        id: export
+      - name: Build & Push Docker image
         run: |
-          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "image_full=$IMAGE" >> $GITHUB_OUTPUT
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          FULL_IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+          LATEST_IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:latest"
 
-  update-helm-values:
-    needs: build
-    runs-on: ubuntu-latest
+          docker build -t $FULL_IMAGE -t $LATEST_IMAGE .
+          docker push $FULL_IMAGE
+          docker push $LATEST_IMAGE
 
-    steps:
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "full_image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+        id: build
+
+      # ------------------- Update Helm values in infra repo -------------------
       - name: Checkout Infra Repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/${{ env.INFRA_REPO }}
-          token: ${{ secrets[env.SECRET_INFRA_PAT] }}
+          repository: ${{ github.actor }}/${{ env.INFRA_REPO }}
+          token: ${{ secrets.INFRA_PAT }}
+          path: infra-temp
           ref: ${{ env.INFRA_BRANCH }}
 
-      - name: Update Helm values.yaml
+      - name: Install yq
         run: |
-          IMAGE_REPO="${{ env.REGION }}-docker.pkg.dev/${{ secrets[env.SECRET_PROJECT] }}/${{ secrets[env.SECRET_ARTIFACT_REPO] }}/${{ env.SERVICE_NAME }}"
-          IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
+          sudo snap install yq --channel=v4/stable || true
+          wget -q https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          yq --version
 
-          sed -i "s|repository:.*|repository: $IMAGE_REPO|g" ${{ env.VALUES_FILE }}
-          sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|g" ${{ env.VALUES_FILE }}
-
-      - name: Commit & Push changes
+      - name: Update image tag in helm/frontend/values.yaml
         run: |
-          git config --global user.email "Leninfitfreak@gmail.com"
-          git config --global user.name "Leningithubactions"
+          cd infra-temp
 
-          git add ${{ env.VALUES_FILE }}
-          git commit -m "Update image for ${{ env.SERVICE_NAME }} -> ${{ needs.build.outputs.image_tag }}" || echo "No changes"
-          git push origin "${{ env.INFRA_BRANCH }}"
+          VALUES_FILE="helm/frontend/values.yaml"
+          
+          if [ ! -f "$VALUES_FILE" ]; then
+            echo "ERROR: $VALUES_FILE not found!"
+            echo "Available files:"
+            find . -name "*.yaml" | head -20
+            exit 1
+          fi
+
+          yq eval '.image.tag = "${{ steps.build.outputs.image_tag }}"' -i "$VALUES_FILE"
+          
+          # Safety fallback in case yq fails on some systems
+          sed -i "s|tag: .*|tag: \"${{ steps.build.outputs.image_tag }}\"|" "$VALUES_FILE"
+
+          echo "Updated $VALUES_FILE with tag: ${{ steps.build.outputs.image_tag }}"
+
+      - name: Commit & Push changes to infra repo
+        run: |
+          cd infra-temp
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions@users.noreply.github.com"
+          
+          git add helm/frontend/values.yaml
+          git commit -m "Deploy frontend ${{ steps.build.outputs.image_tag }} [skip ci]" || echo "No changes to commit"
+          
+          git push origin ${{ env.INFRA_BRANCH }}
+          echo "Pushed new image tag to leninkart-infra → ${{ env.INFRA_BRANCH }}"
+
+      # ------------------- Success Message -------------------
+      - name: Deployment Triggered
+        run: |
+          echo "Frontend successfully deployed!"
+          echo "Image: ${{ steps.build.outputs.full_image }}"
+          echo "Tag: ${{ steps.build.outputs.image_tag }}"
+          echo "ArgoCD will sync automatically in a few seconds"
