@@ -1,0 +1,97 @@
+name: CI/CD for frontend (dev → staging → prod)
+
+on:
+  push:
+    branches:
+      - dev
+      - staging
+      - main
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  SERVICE_NAME: frontend
+  REGION: asia-south1
+
+  # Repo + Branch
+  INFRA_REPO: leninkart-infra
+  INFRA_BRANCH: main
+
+  # Helm paths (correct for your repo)
+  CHART_PATH: helm/frontend
+  VALUES_FILE: helm/frontend/values.yaml
+
+  # Secret variable names (unchanged)
+  SECRET_GCP_SA: GCP_SA_KEY
+  SECRET_PROJECT: GCP_PROJECT
+  SECRET_ARTIFACT_REPO: ARTIFACT_REPO
+  SECRET_INFRA_PAT: INFRA_PAT
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.export.outputs.image_tag }}
+      image_full: ${{ steps.export.outputs.image_full }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets[env.SECRET_GCP_SA] }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build Docker Image
+        run: |
+          TAG="${{ github.sha }}"
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ secrets[env.SECRET_PROJECT] }}/${{ secrets[env.SECRET_ARTIFACT_REPO] }}/${{ env.SERVICE_NAME }}:${TAG}"
+
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker build -t "$IMAGE" .
+
+      - name: Push Docker Image
+        run: docker push "$IMAGE"
+
+      - name: Export Image Output
+        id: export
+        run: |
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image_full=$IMAGE" >> $GITHUB_OUTPUT
+
+  update-helm-values:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Infra Repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/${{ env.INFRA_REPO }}
+          token: ${{ secrets[env.SECRET_INFRA_PAT] }}
+          ref: ${{ env.INFRA_BRANCH }}
+
+      - name: Update Helm values.yaml
+        run: |
+          IMAGE_REPO="${{ env.REGION }}-docker.pkg.dev/${{ secrets[env.SECRET_PROJECT] }}/${{ secrets[env.SECRET_ARTIFACT_REPO] }}/${{ env.SERVICE_NAME }}"
+          IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
+
+          sed -i "s|repository:.*|repository: $IMAGE_REPO|g" ${{ env.VALUES_FILE }}
+          sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|g" ${{ env.VALUES_FILE }}
+
+      - name: Commit & Push changes
+        run: |
+          git config --global user.email "Leninfitfreak@gmail.com"
+          git config --global user.name "Leningithubactions"
+
+          git add ${{ env.VALUES_FILE }}
+          git commit -m "Update image for ${{ env.SERVICE_NAME }} -> ${{ needs.build.outputs.image_tag }}" || echo "No changes"
+          git push origin "${{ env.INFRA_BRANCH }}"
