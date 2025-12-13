@@ -111,4 +111,4 @@ jobs:
           echo "Frontend successfully deployed!"
           echo "Image: ${{ steps.build.outputs.full_image }}"
           echo "Tag: ${{ steps.build.outputs.image_tag }}"
-          echo "ArgoCD will sync automatically in a few seconds"
+          echo "ArgoCD will sync automatically in a few seconds"    
