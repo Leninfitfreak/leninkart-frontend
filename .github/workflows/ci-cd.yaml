@@ -11,9 +11,11 @@ on:
 env:
   SERVICE_NAME: frontend
   IMAGE_NAME: frontend
-  GCP_PROJECT: leninkart-478305
-  ARTIFACT_REPO: leninkart
+  GCP_PROJECT_ID: leninkart-478305
   REGION: asia-south1
+  ARTIFACT_REPO: leninkart
+
+  # Infra repo (CD source of truth)
   INFRA_REPO: Leninfitfreak/leninkart-infra
 
 jobs:
@@ -21,47 +23,56 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write   # REQUIRED for Workload Identity
       packages: write
-      id-token: write
 
     steps:
-      # ------------------- Checkout Service Repo -------------------
-      - name: Checkout source code
+      # ------------------------------------------------
+      # 1. Checkout frontend repo
+      # ------------------------------------------------
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ------------------- Derive Environment from Branch -------------------
+      # ------------------------------------------------
+      # 2. Decide environment from branch
+      # ------------------------------------------------
       - name: Set environment variables
-        id: env
         run: |
-          BRANCH=${GITHUB_REF##*/}
+          BRANCH="${GITHUB_REF##*/}"
 
           if [ "$BRANCH" = "main" ]; then
-            ENV=prod
+            ENV="prod"
             IMAGE_TAG="prod-${GITHUB_SHA::7}"
-            INFRA_BRANCH=main
+            INFRA_BRANCH="main"
           elif [ "$BRANCH" = "staging" ]; then
-            ENV=staging
+            ENV="staging"
             IMAGE_TAG="staging-${GITHUB_SHA::7}"
-            INFRA_BRANCH=staging
+            INFRA_BRANCH="staging"
           else
-            ENV=dev
+            ENV="dev"
             IMAGE_TAG="dev-${GITHUB_SHA::7}"
-            INFRA_BRANCH=dev
+            INFRA_BRANCH="dev"
           fi
 
           echo "ENV=$ENV" >> $GITHUB_ENV
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "INFRA_BRANCH=$INFRA_BRANCH" >> $GITHUB_ENV
 
-      # ------------------- Authenticate to Google Cloud -------------------
+      # ------------------------------------------------
+      # 3. Authenticate to Google Cloud (FIXED)
+      # ------------------------------------------------
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/${{ secrets.GCP_PROJECT }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-          service_account: ${{ secrets.GCP_SA_KEY }}@leninkart-478305.iam.gserviceaccount.com
+          # 🔴 IMPORTANT: this MUST be PROJECT NUMBER, not project ID
+          workload_identity_provider: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@leninkart-478305.iam.gserviceaccount.com
 
+      # ------------------------------------------------
+      # 4. Setup gcloud & Docker auth
+      # ------------------------------------------------
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
@@ -69,33 +80,40 @@ jobs:
         run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      # ------------------- Build & Push Image -------------------
+      # ------------------------------------------------
+      # 5. Build & Push Docker Image
+      # ------------------------------------------------
       - name: Build & Push Docker Image
-        id: build
         run: |
-          FULL_IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
 
-          docker build -t $FULL_IMAGE .
-          docker push $FULL_IMAGE
+          docker build -t $IMAGE .
+          docker push $IMAGE
 
-          echo "full_image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      # ------------------- Checkout Infra Repo -------------------
-      - name: Checkout Infra Repo
+      # ------------------------------------------------
+      # 6. Checkout Infra Repo (GitOps)
+      # ------------------------------------------------
+      - name: Checkout infra repo
         uses: actions/checkout@v4
         with:
           repository: ${{ env.INFRA_REPO }}
-          token: ${{ secrets.INFRA_PAT }}
           ref: ${{ env.INFRA_BRANCH }}
+          token: ${{ secrets.INFRA_PAT }}
           path: infra
 
-      # ------------------- Install yq -------------------
+      # ------------------------------------------------
+      # 7. Install yq
+      # ------------------------------------------------
       - name: Install yq
         run: |
           wget -q https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -O /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
 
-      # ------------------- Update Helm values -------------------
+      # ------------------------------------------------
+      # 8. Update Helm values.yaml
+      # ------------------------------------------------
       - name: Update Helm image tag
         run: |
           cd infra
@@ -103,23 +121,27 @@ jobs:
 
           yq eval ".image.tag = \"${IMAGE_TAG}\"" -i "$VALUES_FILE"
 
-          echo "Updated $VALUES_FILE with tag $IMAGE_TAG"
+          echo "Updated $VALUES_FILE → tag=${IMAGE_TAG}"
 
-      # ------------------- Commit & Push Infra Changes -------------------
-      - name: Commit & Push Infra Repo
+      # ------------------------------------------------
+      # 9. Commit & Push Infra Changes
+      # ------------------------------------------------
+      - name: Commit & Push infra repo
         run: |
           cd infra
           git config user.name "github-actions[bot]"
           git config user.email "github-actions@users.noreply.github.com"
 
           git add helm/frontend/values.yaml
-          git commit -m "deploy(frontend): ${IMAGE_TAG} → ${ENV}" || echo "No changes"
+          git commit -m "deploy(frontend): ${IMAGE_TAG} → ${ENV}" || echo "No changes to commit"
           git push origin $INFRA_BRANCH
 
-      # ------------------- Success -------------------
+      # ------------------------------------------------
+      # 10. Done
+      # ------------------------------------------------
       - name: Deployment Triggered
         run: |
-          echo "Frontend deployment triggered via GitOps"
+          echo "✅ Frontend deployment triggered via GitOps"
           echo "Environment: $ENV"
-          echo "Image: ${{ steps.build.outputs.full_image }}"
+          echo "Image: $IMAGE"
           echo "Argo CD will sync automatically"
