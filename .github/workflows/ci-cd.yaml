@@ -1,10 +1,12 @@
-name: Deploy Frontend to GCP
+name: Deploy Frontend to GCP (GitOps)
 
 on:
   push:
     branches:
-      - main               # change to your default branch if different
-  workflow_dispatch:       # allows manual trigger
+      - dev
+      - staging
+      - main
+  workflow_dispatch:
 
 env:
   SERVICE_NAME: frontend
@@ -12,11 +14,10 @@ env:
   GCP_PROJECT: leninkart-478305
   ARTIFACT_REPO: leninkart
   REGION: asia-south1
-  INFRA_REPO: leninkart-infra
-  INFRA_BRANCH: ${{ vars.INFRA_BRANCH || 'main' }}   # fallback to main if var not set
+  INFRA_REPO: Leninfitfreak/leninkart-infra
 
 jobs:
-  build-and-deploy:
+  build-and-promote:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,17 +25,42 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout code
+      # ------------------- Checkout Service Repo -------------------
+      - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ------------------- Build & Push Docker Image -------------------
+      # ------------------- Derive Environment from Branch -------------------
+      - name: Set environment variables
+        id: env
+        run: |
+          BRANCH=${GITHUB_REF##*/}
+
+          if [ "$BRANCH" = "main" ]; then
+            ENV=prod
+            IMAGE_TAG="prod-${GITHUB_SHA::7}"
+            INFRA_BRANCH=main
+          elif [ "$BRANCH" = "staging" ]; then
+            ENV=staging
+            IMAGE_TAG="staging-${GITHUB_SHA::7}"
+            INFRA_BRANCH=staging
+          else
+            ENV=dev
+            IMAGE_TAG="dev-${GITHUB_SHA::7}"
+            INFRA_BRANCH=dev
+          fi
+
+          echo "ENV=$ENV" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "INFRA_BRANCH=$INFRA_BRANCH" >> $GITHUB_ENV
+
+      # ------------------- Authenticate to Google Cloud -------------------
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: 'projects/${{ secrets.GCP_PROJECT }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
-          service_account: '${{ secrets.GCP_SA_KEY }}@leninkart-478305.iam.gserviceaccount.com'
+          workload_identity_provider: projects/${{ secrets.GCP_PROJECT }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: ${{ secrets.GCP_SA_KEY }}@leninkart-478305.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -43,72 +69,57 @@ jobs:
         run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      - name: Build & Push Docker image
-        run: |
-          IMAGE_TAG=$(git rev-parse --short HEAD)
-          FULL_IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
-          LATEST_IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:latest"
-
-          docker build -t $FULL_IMAGE -t $LATEST_IMAGE .
-          docker push $FULL_IMAGE
-          docker push $LATEST_IMAGE
-
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "full_image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+      # ------------------- Build & Push Image -------------------
+      - name: Build & Push Docker Image
         id: build
+        run: |
+          FULL_IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
 
-      # ------------------- Update Helm values in infra repo -------------------
+          docker build -t $FULL_IMAGE .
+          docker push $FULL_IMAGE
+
+          echo "full_image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+
+      # ------------------- Checkout Infra Repo -------------------
       - name: Checkout Infra Repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.actor }}/${{ env.INFRA_REPO }}
+          repository: ${{ env.INFRA_REPO }}
           token: ${{ secrets.INFRA_PAT }}
-          path: infra-temp
           ref: ${{ env.INFRA_BRANCH }}
+          path: infra
 
+      # ------------------- Install yq -------------------
       - name: Install yq
         run: |
-          sudo snap install yq --channel=v4/stable || true
           wget -q https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -O /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
-          yq --version
 
-      - name: Update image tag in helm/frontend/values.yaml
+      # ------------------- Update Helm values -------------------
+      - name: Update Helm image tag
         run: |
-          cd infra-temp
-
+          cd infra
           VALUES_FILE="helm/frontend/values.yaml"
-          
-          if [ ! -f "$VALUES_FILE" ]; then
-            echo "ERROR: $VALUES_FILE not found!"
-            echo "Available files:"
-            find . -name "*.yaml" | head -20
-            exit 1
-          fi
 
-          yq eval '.image.tag = "${{ steps.build.outputs.image_tag }}"' -i "$VALUES_FILE"
-          
-          # Safety fallback in case yq fails on some systems
-          sed -i "s|tag: .*|tag: \"${{ steps.build.outputs.image_tag }}\"|" "$VALUES_FILE"
+          yq eval ".image.tag = \"${IMAGE_TAG}\"" -i "$VALUES_FILE"
 
-          echo "Updated $VALUES_FILE with tag: ${{ steps.build.outputs.image_tag }}"
+          echo "Updated $VALUES_FILE with tag $IMAGE_TAG"
 
-      - name: Commit & Push changes to infra repo
+      # ------------------- Commit & Push Infra Changes -------------------
+      - name: Commit & Push Infra Repo
         run: |
-          cd infra-temp
+          cd infra
           git config user.name "github-actions[bot]"
           git config user.email "github-actions@users.noreply.github.com"
-          
-          git add helm/frontend/values.yaml
-          git commit -m "Deploy frontend ${{ steps.build.outputs.image_tag }} [skip ci]" || echo "No changes to commit"
-          
-          git push origin ${{ env.INFRA_BRANCH }}
-          echo "Pushed new image tag to leninkart-infra → ${{ env.INFRA_BRANCH }}"
 
-      # ------------------- Success Message -------------------
+          git add helm/frontend/values.yaml
+          git commit -m "deploy(frontend): ${IMAGE_TAG} → ${ENV}" || echo "No changes"
+          git push origin $INFRA_BRANCH
+
+      # ------------------- Success -------------------
       - name: Deployment Triggered
         run: |
-          echo "Frontend successfully deployed!"
+          echo "Frontend deployment triggered via GitOps"
+          echo "Environment: $ENV"
           echo "Image: ${{ steps.build.outputs.full_image }}"
-          echo "Tag: ${{ steps.build.outputs.image_tag }}"
-          echo "ArgoCD will sync automatically in a few seconds"    
+          echo "Argo CD will sync automatically"
