@@ -1,4 +1,4 @@
-name: Deploy Frontend to GCP (GitOps – Split Jobs)
+name: Deploy Frontend to GCP (GitOps)
 
 on:
   push:
@@ -17,13 +17,12 @@ env:
   INFRA_REPO: Leninfitfreak/leninkart-infra
 
 # --------------------------------------------------
-# JOB 1: AUTHENTICATION (GCP + Docker)
+# JOB 1: PREPARE CONTEXT (branch → tag)
 # --------------------------------------------------
 jobs:
-  auth:
+  prepare:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
 
     outputs:
@@ -33,7 +32,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Derive image tag from branch
+      - name: Resolve image tag
         id: meta
         run: |
           BRANCH="${GITHUB_REF##*/}"
@@ -48,57 +47,57 @@ jobs:
 
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          # 🔴 MUST be project NUMBER
-          workload_identity_provider: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-          service_account: github-actions@leninkart-478305.iam.gserviceaccount.com
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: |
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-
 # --------------------------------------------------
-# JOB 2: BUILD & PUSH IMAGE
+# JOB 2: BUILD & PUBLISH IMAGE
 # --------------------------------------------------
-  build_push:
+  build_image:
     runs-on: ubuntu-latest
-    needs: auth
+    needs: prepare
     permissions:
       contents: read
+      id-token: write
       packages: write
 
     outputs:
-      image_tag: ${{ needs.auth.outputs.image_tag }}
+      image_tag: ${{ needs.prepare.outputs.image_tag }}
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/50772184738/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions@leninkart-478305.iam.gserviceaccount.com
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
       - name: Build & Push Docker image
         run: |
-          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ needs.auth.outputs.image_tag }}"
+          IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.image_tag }}"
 
           docker build -t $IMAGE .
           docker push $IMAGE
 
-          echo "Image pushed: $IMAGE"
+          echo "Pushed image: $IMAGE"
 
 # --------------------------------------------------
-# JOB 3: UPDATE INFRA REPO (GitOps trigger)
+# JOB 3: UPDATE INFRASTRUCTURE REPO (GitOps trigger)
 # --------------------------------------------------
-  update_infra:
+  promote_release:
     runs-on: ubuntu-latest
-    needs: build_push
+    needs: build_image
     permissions:
       contents: write
 
     steps:
-      - name: Decide infra branch
+      - name: Select infra branch
         run: |
           BRANCH="${GITHUB_REF##*/}"
 
@@ -118,21 +117,21 @@ jobs:
           token: ${{ secrets.INFRA_PAT }}
           path: infra
 
-      - name: Update Helm values.yaml
+      - name: Update Helm values
         run: |
           cd infra
           VALUES_FILE="helm/frontend/values.yaml"
 
-          sed -i "s|tag:.*|tag: \"${{ needs.build_push.outputs.image_tag }}\"|" "$VALUES_FILE"
+          sed -i "s|tag:.*|tag: \"${{ needs.build_image.outputs.image_tag }}\"|" "$VALUES_FILE"
 
-          echo "Updated image tag to ${{ needs.build_push.outputs.image_tag }}"
+          echo "Updated Helm image tag"
 
-      - name: Commit & push infra changes
+      - name: Commit & push changes
         run: |
           cd infra
           git config user.name "github-actions[bot]"
           git config user.email "github-actions@users.noreply.github.com"
 
           git add helm/frontend/values.yaml
-          git commit -m "deploy(frontend): ${{ needs.build_push.outputs.image_tag }}" || echo "No changes"
+          git commit -m "deploy(frontend): ${{ needs.build_image.outputs.image_tag }}" || echo "No changes"
           git push origin $INFRA_BRANCH
