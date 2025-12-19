@@ -8,10 +8,16 @@ on:
       - main
   workflow_dispatch:
 
+# Prevent overlapping deployments per branch
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   SERVICE_NAME: frontend
   IMAGE_NAME: frontend
   GCP_PROJECT_ID: leninkart-478305
+  GCP_PROJECT_NUMBER: 50772184738
   REGION: asia-south1
   ARTIFACT_REPO: leninkart
   INFRA_REPO: Leninfitfreak/leninkart-infra
@@ -34,29 +40,30 @@ jobs:
 
       - name: Resolve image tag
         id: meta
+        shell: bash
         run: |
           BRANCH="${GITHUB_REF##*/}"
 
-          if [ "$BRANCH" = "main" ]; then
+          if [[ "$BRANCH" == "main" ]]; then
             TAG="prod-${GITHUB_SHA::7}"
-          elif [ "$BRANCH" = "staging" ]; then
+          elif [[ "$BRANCH" == "staging" ]]; then
             TAG="staging-${GITHUB_SHA::7}"
           else
             TAG="dev-${GITHUB_SHA::7}"
           fi
 
-          echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
 
 # --------------------------------------------------
-# JOB 2: BUILD & PUBLISH IMAGE
+# JOB 2: BUILD & PUSH IMAGE (Artifact Registry)
 # --------------------------------------------------
   build_image:
     runs-on: ubuntu-latest
     needs: prepare
+
     permissions:
       contents: read
-      id-token: write
-      packages: write
+      id-token: write   # REQUIRED for WIF
 
     outputs:
       image_tag: ${{ needs.prepare.outputs.image_tag }}
@@ -65,48 +72,59 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      # 🔐 Workload Identity Federation (FIXED)
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/50772184738/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          workload_identity_provider: projects/${{ env.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
           service_account: github-actions@leninkart-478305.iam.gserviceaccount.com
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker
+      - name: Configure Docker for Artifact Registry
         run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
+      # 🚀 Docker Buildx (cache enabled)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build & Push Docker image
+        shell: bash
         run: |
           IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.image_tag }}"
 
-          docker build -t $IMAGE .
-          docker push $IMAGE
+          docker buildx build \
+            --push \
+            --cache-from=type=registry,ref=$IMAGE \
+            --cache-to=type=inline \
+            -t $IMAGE .
 
-          echo "Pushed image: $IMAGE"
+          echo "✅ Pushed image: $IMAGE"
 
 # --------------------------------------------------
-# JOB 3: UPDATE INFRASTRUCTURE REPO (GitOps trigger)
+# JOB 3: UPDATE INFRA REPO (GitOps trigger)
 # --------------------------------------------------
   promote_release:
     runs-on: ubuntu-latest
     needs: build_image
+
     permissions:
       contents: write
 
     steps:
       - name: Select infra branch
+        shell: bash
         run: |
           BRANCH="${GITHUB_REF##*/}"
 
-          if [ "$BRANCH" = "main" ]; then
-            echo "INFRA_BRANCH=main" >> $GITHUB_ENV
-          elif [ "$BRANCH" = "staging" ]; then
-            echo "INFRA_BRANCH=staging" >> $GITHUB_ENV
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "INFRA_BRANCH=main" >> "$GITHUB_ENV"
+          elif [[ "$BRANCH" == "staging" ]]; then
+            echo "INFRA_BRANCH=staging" >> "$GITHUB_ENV"
           else
-            echo "INFRA_BRANCH=dev" >> $GITHUB_ENV
+            echo "INFRA_BRANCH=dev" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout infra repo
@@ -117,21 +135,24 @@ jobs:
           token: ${{ secrets.INFRA_PAT }}
           path: infra
 
+      # ✅ Safe YAML edit
+      - name: Install yq
+        uses: mikefarah/yq@v4
+
       - name: Update Helm values
+        shell: bash
         run: |
           cd infra
-          VALUES_FILE="helm/frontend/values.yaml"
-
-          sed -i "s|tag:.*|tag: \"${{ needs.build_image.outputs.image_tag }}\"|" "$VALUES_FILE"
-
-          echo "Updated Helm image tag"
+          yq -i '.image.tag = "${{ needs.build_image.outputs.image_tag }}"' helm/frontend/values.yaml
+          echo "✅ Updated Helm image tag"
 
       - name: Commit & push changes
+        shell: bash
         run: |
           cd infra
           git config user.name "github-actions[bot]"
           git config user.email "github-actions@users.noreply.github.com"
 
           git add helm/frontend/values.yaml
-          git commit -m "deploy(frontend): ${{ needs.build_image.outputs.image_tag }}" || echo "No changes"
-          git push origin $INFRA_BRANCH
+          git commit -m "deploy(frontend): ${{ needs.build_image.outputs.image_tag }}" || echo "No changes to commit"
+          git push origin "$INFRA_BRANCH"
