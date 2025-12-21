@@ -23,7 +23,7 @@ env:
   INFRA_REPO: Leninfitfreak/leninkart-infra
 
 # --------------------------------------------------
-# JOB 1: PREPARE IMAGE TAG
+# JOB 1: PREPARE IMAGE TAG (branch + build id)
 # --------------------------------------------------
 jobs:
   prepare:
@@ -42,19 +42,21 @@ jobs:
         shell: bash
         run: |
           BRANCH="${GITHUB_REF##*/}"
+          BUILD_ID="${GITHUB_RUN_NUMBER}"
+          SHORT_SHA="${GITHUB_SHA::7}"
 
           if [[ "$BRANCH" == "main" ]]; then
-            TAG="prod-${GITHUB_SHA::7}"
+            TAG="prod-${BUILD_ID}-${SHORT_SHA}"
           elif [[ "$BRANCH" == "staging" ]]; then
-            TAG="staging-${GITHUB_SHA::7}"
+            TAG="staging-${BUILD_ID}-${SHORT_SHA}"
           else
-            TAG="dev-${GITHUB_SHA::7}"
+            TAG="dev-${BUILD_ID}-${SHORT_SHA}"
           fi
 
           echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
 
 # --------------------------------------------------
-# JOB 2: BUILD & PUSH IMAGE
+# JOB 2: BUILD & PUSH IMAGE (Artifact Registry)
 # --------------------------------------------------
   build_image:
     runs-on: ubuntu-latest
@@ -62,7 +64,7 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write
+      id-token: write   # Required for Workload Identity Federation
 
     outputs:
       image_tag: ${{ needs.prepare.outputs.image_tag }}
@@ -78,9 +80,12 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker
+      - name: Configure Docker for Artifact Registry
         run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build & Push Docker image
         shell: bash
@@ -89,12 +94,14 @@ jobs:
 
           docker buildx build \
             --push \
+            --cache-from=type=registry,ref=$IMAGE \
+            --cache-to=type=inline \
             -t "$IMAGE" .
 
-          echo "✅ Pushed $IMAGE"
+          echo "✅ Pushed image: $IMAGE"
 
 # --------------------------------------------------
-# JOB 3: UPDATE INFRA REPO (GitOps)
+# JOB 3: UPDATE INFRA REPO (GitOps trigger)
 # --------------------------------------------------
   promote_release:
     runs-on: ubuntu-latest
