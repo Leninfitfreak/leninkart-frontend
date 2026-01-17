@@ -12,5 +12,5 @@
     "start": "react-scripts start",
     "build": "react-scripts build"
   },
-  "proxy": "http://api-gateway:8080"
+  "proxy": "http://nginx:80"
 }
