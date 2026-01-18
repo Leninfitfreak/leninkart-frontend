@@ -11,6 +11,5 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build"
-  },
-  "proxy": "http://nginx:80"
+  }
 }
