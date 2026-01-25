@@ -1,4 +1,16 @@
-import React, {useEffect, useState} from 'react';
+#!/usr/bin/env python3
+"""
+Fix LeninKart Frontend Repository
+Updates index.js to handle Kubernetes environment with proper error handling
+Author: Lenin Raj
+"""
+
+from pathlib import Path
+from datetime import datetime
+import shutil
+
+# The fixed index.js with error handling
+FIXED_INDEX_JS = '''import React, {useEffect, useState} from 'react';
 import ReactDOM from 'react-dom/client';
 import axios from 'axios';
 import './index.css';
@@ -167,3 +179,126 @@ function App(){
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
+'''
+
+FIXED_PACKAGE_JSON = '''{
+  "name": "leninkart-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "axios": "^1.4.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build"
+  }
+}
+'''
+
+class FrontendFixer:
+    def __init__(self, repo_path="."):
+        self.repo_path = Path(repo_path)
+        self.backup_dir = self.repo_path / f"_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.fixes = []
+        
+    def log(self, msg, level="INFO"):
+        colors = {"INFO": "\033[94m", "SUCCESS": "\033[92m", "ERROR": "\033[91m", "RESET": "\033[0m"}
+        print(f"{colors.get(level, '')}{level}: {msg}{colors['RESET']}")
+    
+    def backup_file(self, file_path):
+        if not self.backup_dir.exists():
+            self.backup_dir.mkdir(parents=True)
+        
+        rel_path = file_path.relative_to(self.repo_path)
+        backup_path = self.backup_dir / rel_path
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(file_path, backup_path)
+    
+    def fix_index_js(self):
+        """Replace index.js with Kubernetes-compatible version"""
+        index_file = self.repo_path / "src/index.js"
+        
+        if not index_file.exists():
+            self.log("src/index.js not found!", "ERROR")
+            return False
+        
+        self.backup_file(index_file)
+        index_file.write_text(FIXED_INDEX_JS, encoding='utf-8')
+        
+        self.fixes.append("✓ Updated index.js with error handling")
+        self.log("Fixed src/index.js", "SUCCESS")
+        return True
+    
+    def fix_package_json(self):
+        """Remove proxy from package.json"""
+        pkg_file = self.repo_path / "package.json"
+        
+        if not pkg_file.exists():
+            self.log("package.json not found!", "ERROR")
+            return False
+        
+        self.backup_file(pkg_file)
+        pkg_file.write_text(FIXED_PACKAGE_JSON, encoding='utf-8')
+        
+        self.fixes.append("✓ Updated package.json (removed proxy)")
+        self.log("Fixed package.json", "SUCCESS")
+        return True
+    
+    def run(self):
+        self.log("=" * 60, "INFO")
+        self.log("LeninKart Frontend Fixer", "INFO")
+        self.log("=" * 60, "INFO")
+        
+        # Verify we're in the right repo
+        if not (self.repo_path / "src").exists():
+            self.log("ERROR: Not in leninkart-frontend repo!", "ERROR")
+            self.log("Run this from the frontend repository root", "ERROR")
+            return False
+        
+        self.log("Starting fixes...", "INFO")
+        self.fix_index_js()
+        self.fix_package_json()
+        
+        self.log("", "INFO")
+        self.log("=" * 60, "SUCCESS")
+        self.log(f"Applied {len(self.fixes)} fixes:", "SUCCESS")
+        for fix in self.fixes:
+            self.log(f"  {fix}", "SUCCESS")
+        
+        self.log("", "INFO")
+        self.log(f"Backup: {self.backup_dir.name}", "INFO")
+        self.log("", "INFO")
+        self.log("NEXT STEPS:", "INFO")
+        self.log("", "INFO")
+        self.log("1. Build new Docker image:", "INFO")
+        timestamp = datetime.now().strftime('%s')
+        self.log(f"   docker build -t leninfitfreak/frontend:{timestamp} .", "INFO")
+        self.log("", "INFO")
+        self.log("2. Push to Docker Hub:", "INFO")
+        self.log(f"   docker push leninfitfreak/frontend:{timestamp}", "INFO")
+        self.log("", "INFO")
+        self.log("3. Update infra repo values-dev.yaml:", "INFO")
+        self.log(f"   Change image.tag to '{timestamp}'", "INFO")
+        self.log("", "INFO")
+        self.log("4. Commit frontend changes:", "INFO")
+        self.log("   git add .", "INFO")
+        self.log("   git commit -m 'fix: add K8s error handling'", "INFO")
+        self.log("   git push origin dev", "INFO")
+        self.log("=" * 60, "INFO")
+        
+        return True
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        repo_path = sys.argv[1]
+    else:
+        repo_path = "."
+    
+    fixer = FrontendFixer(repo_path)
+    success = fixer.run()
+    sys.exit(0 if success else 1)
