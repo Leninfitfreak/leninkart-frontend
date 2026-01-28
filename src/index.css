@@ -1,21 +1,24 @@
-:root{
-  --bg1: #f5f7ff;
-  --accent: linear-gradient(90deg,#6b8cff,#9b59ff);
-  --card: #ffffff;
-  --muted: #6b7280;
-  --green: #10b981;
-  --blue: #3b82f6;
-}
-body{font-family: Inter, Arial, sans-serif; margin:0; background:var(--bg1); color:#111;}
-.header{background: linear-gradient(90deg,#6b8cff,#9b59ff); color:white; padding:24px 16px; box-shadow:0 4px 14px rgba(11,22,60,0.08);}
-.header h1{margin:0;font-size:28px;letter-spacing:0.2px;}
-.container{max-width:1100px;margin:24px auto;padding:0 16px;display:flex;gap:24px;}
-.left{flex:1}
-.right{width:360px}
-.card{background:var(--card);border-radius:10px;padding:14px;box-shadow:0 2px 6px rgba(16,24,40,0.06);margin-bottom:12px;border:1px solid rgba(16,24,40,0.04)}
-.product-title{font-weight:700}
-.badge{display:inline-block;padding:6px 8px;border-radius:6px;background:rgba(59,130,246,0.08);color:var(--blue);font-weight:600;margin-top:8px}
-.button{background:var(--green);color:white;padding:8px 12px;border-radius:8px;border:none;cursor:pointer;font-weight:600}
-.small-btn{background:#3b82f6;color:white;padding:6px 8px;border-radius:6px;border:none;cursor:pointer}
-.form input{width:100%;padding:8px;margin-top:6px;border-radius:6px;border:1px solid #e5e7eb}
-.footer{max-width:1100px;margin:20px auto;color:var(--muted);font-size:13px;text-align:center}
+// In the products map
+{products.map(p => (
+  <div key={p.id} className='card'>
+    <div className='product-title'>{p.name} — ₹{p.price}</div>
+    <div style={{ marginTop: 8, color: '#374151' }}>{p.description}</div>
+    <div style={{ marginTop: 12 }}>
+      <button 
+        className='button' 
+        onClick={() => buy(p.id)} 
+        disabled={loading}
+      >
+        {loading ? 'Processing...' : 'Buy'}
+      </button>
+    </div>
+  </div>
+))}
+
+// In the orders map
+{orders.map(o => (
+  <div key={o.id} className='card'>
+    <div style={{ fontWeight: 700 }}>{o.productName} — ₹{o.price}</div>
+    <div style={{ marginTop: 6, color: '#6b7280' }}>Status: {o.status}</div>
+  </div>
+))}
