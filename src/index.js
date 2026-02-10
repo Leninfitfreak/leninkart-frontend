@@ -18,7 +18,11 @@ api.interceptors.request.use((config) => {
 
 function formatCurrency(value) {
   const number = Number(value || 0);
-  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(number);
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0,
+  }).format(number);
 }
 
 function App() {
@@ -38,6 +42,7 @@ function App() {
   const [authError, setAuthError] = useState('');
   const [dataError, setDataError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [authMode, setAuthMode] = useState('login');
 
   useEffect(() => {
     if (!session) return undefined;
@@ -65,7 +70,7 @@ function App() {
       });
   }
 
-  async function handleLogin(e) {
+  async function handleAuth(e) {
     e.preventDefault();
     const username = e.target.username.value.trim();
     const password = e.target.password.value.trim();
@@ -74,12 +79,17 @@ function App() {
       setAuthError('Please enter both username/email and password.');
       return;
     }
+    if (authMode === 'signup' && password.length < 6) {
+      setAuthError('Password must be at least 6 characters.');
+      return;
+    }
 
     setAuthLoading(true);
     setAuthError('');
 
     try {
-      const res = await api.post('/auth/login', { username, password });
+      const endpoint = authMode === 'signup' ? '/auth/signup' : '/auth/login';
+      const res = await api.post(endpoint, { username, password });
       const data = res.data || {};
       if (!data.token) {
         setAuthError('Invalid login response from server.');
@@ -93,7 +103,14 @@ function App() {
       setDataError('');
     } catch (err) {
       console.error(err);
-      setAuthError('Invalid username or password.');
+      const status = err?.response?.status;
+      if (status === 409) {
+        setAuthError('User already exists. Please sign in.');
+      } else if (status === 401) {
+        setAuthError('Invalid username or password.');
+      } else {
+        setAuthError('Unable to authenticate. Please try again.');
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -169,7 +186,7 @@ function App() {
       <div className="login-page">
         <div className="login-brand">
           <div className="logo-badge">LK</div>
-          <h1>LeninKart – Smart Shopping</h1>
+          <h1>LeninKart - Smart Shopping</h1>
           <p>
             Secure access to your personal storefront. Manage products, track
             orders, and view user-based insights in one place.
@@ -191,10 +208,14 @@ function App() {
         </div>
         <div className="login-card">
           <div className="login-header">
-            <h2>Sign in</h2>
-            <p>Use your LeninKart credentials to continue.</p>
+            <h2>{authMode === 'signup' ? 'Create account' : 'Sign in'}</h2>
+            <p>
+              {authMode === 'signup'
+                ? 'Create a new account to continue.'
+                : 'Use your LeninKart credentials to continue.'}
+            </p>
           </div>
-          <form className="login-form" onSubmit={handleLogin}>
+          <form className="login-form" onSubmit={handleAuth}>
             <label>
               Username or Email
               <input name="username" placeholder="lenin@leninkart.io" />
@@ -205,9 +226,22 @@ function App() {
             </label>
             {authError && <div className="error">{authError}</div>}
             <button className="btn primary" type="submit" disabled={authLoading}>
-              {authLoading ? 'Signing in...' : 'Login'}
+              {authLoading ? 'Please wait...' : authMode === 'signup' ? 'Create account' : 'Login'}
             </button>
           </form>
+          <div className="auth-toggle">
+            {authMode === 'signup' ? 'Already have an account?' : 'New to LeninKart?'}
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                setAuthMode(authMode === 'signup' ? 'login' : 'signup');
+                setAuthError('');
+              }}
+            >
+              {authMode === 'signup' ? 'Sign in' : 'Create account'}
+            </button>
+          </div>
           <div className="login-footer">
             By continuing, you agree to LeninKart security guidelines.
           </div>
@@ -220,7 +254,7 @@ function App() {
     <div className="dashboard">
       <header className="topbar">
         <div>
-          <div className="brand">LeninKart – Smart Shopping</div>
+          <div className="brand">LeninKart - Smart Shopping</div>
           <div className="subtitle">User-specific catalog and order tracking</div>
         </div>
         <div className="user-pill">
@@ -258,7 +292,7 @@ function App() {
             <h2>Products</h2>
             <span className="pill">{stats.totalProducts} items</span>
           </div>
-          {products.length === 0 && <div className="empty-card">No products yet — add one below.</div>}
+          {products.length === 0 && <div className="empty-card">No products yet - add one below.</div>}
           <div className="list">
             {products.map((p) => (
               <div key={p.id} className="card">

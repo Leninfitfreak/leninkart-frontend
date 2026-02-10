@@ -138,6 +138,28 @@ body {
   font-size: 0.85rem;
 }
 
+.auth-toggle {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.link {
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
 .btn {
   border: none;
   border-radius: 999px;
