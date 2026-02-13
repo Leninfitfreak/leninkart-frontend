@@ -227,7 +227,7 @@ function App() {
       <div className="login-page">
         <div className="login-brand">
           <div className="logo-badge">LK</div>
-          <h1>LeninKart Commerce Portal</h1>
+          <h1>LeninKart E-Commerce Portal</h1>
           <p>
             Centralized access for catalog operations, order visibility, and secure account-based usage across the platform.
           </p>
