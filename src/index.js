@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+ï»¿import React, { useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import axios from 'axios';
 import './index.css';
@@ -36,10 +36,12 @@ function App() {
       return null;
     }
   });
+
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
   const [dataError, setDataError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authMode, setAuthMode] = useState('login');
@@ -72,31 +74,64 @@ function App() {
 
   async function handleAuth(e) {
     e.preventDefault();
-    const username = e.target.username.value.trim();
+    const email = e.target.email.value.trim();
     const password = e.target.password.value.trim();
 
-    if (!username || !password) {
-      setAuthError('Please enter both username/email and password.');
+    if (!email || !password) {
+      setAuthError('Please enter both email and password.');
       return;
     }
-    if (authMode === 'signup' && password.length < 6) {
-      setAuthError('Password must be at least 6 characters.');
-      return;
+
+    if (authMode === 'signup') {
+      const fullName = e.target.fullName.value.trim();
+      const confirmPassword = e.target.confirmPassword.value.trim();
+      if (!fullName) {
+        setAuthError('Please enter your full name.');
+        return;
+      }
+      if (!email.includes('@')) {
+        setAuthError('Please use a valid email for account creation.');
+        return;
+      }
+      if (password.length < 6) {
+        setAuthError('Password must be at least 6 characters.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setAuthError('Password and confirm password do not match.');
+        return;
+      }
     }
 
     setAuthLoading(true);
     setAuthError('');
+    setAuthNotice('');
 
     try {
       const endpoint = authMode === 'signup' ? '/auth/signup' : '/auth/login';
-      const res = await api.post(endpoint, { username, password });
+      const payload = authMode === 'signup'
+        ? { fullName: e.target.fullName.value.trim(), email, password }
+        : { email, password };
+      const res = await api.post(endpoint, payload);
       const data = res.data || {};
+
+      if (authMode === 'signup') {
+        if (!data.userId) {
+          setAuthError('Invalid account creation response from server.');
+          return;
+        }
+        setAuthNotice('Account created successfully. Please sign in with your credentials.');
+        setAuthMode('login');
+        e.target.reset();
+        return;
+      }
+
       if (!data.token) {
         setAuthError('Invalid login response from server.');
         return;
       }
 
-      const userInfo = { userId: data.userId || username, role: data.role || 'USER' };
+      const userInfo = { userId: data.userId || email, role: data.role || 'USER' };
       localStorage.setItem(TOKEN_KEY, data.token);
       localStorage.setItem(USER_KEY, JSON.stringify(userInfo));
       setSession({ token: data.token, ...userInfo });
@@ -107,13 +142,19 @@ function App() {
       if (status === 409) {
         setAuthError('User already exists. Please sign in.');
       } else if (status === 401) {
-        setAuthError('Invalid username or password.');
+        setAuthError('Invalid email or password.');
       } else {
         setAuthError('Unable to authenticate. Please try again.');
       }
     } finally {
       setAuthLoading(false);
     }
+  }
+
+  function switchAuthMode(nextMode) {
+    setAuthMode(nextMode);
+    setAuthError('');
+    setAuthNotice('');
   }
 
   function handleLogout() {
@@ -186,64 +227,79 @@ function App() {
       <div className="login-page">
         <div className="login-brand">
           <div className="logo-badge">LK</div>
-          <h1>LeninKart - Smart Shopping</h1>
+          <h1>LeninKart Commerce Portal</h1>
           <p>
-            Secure access to your personal storefront. Manage products, track
-            orders, and view user-based insights in one place.
+            Centralized access for catalog operations, order visibility, and secure account-based usage across the platform.
           </p>
           <div className="brand-metrics">
             <div>
-              <span>Products</span>
-              <strong>Curated</strong>
+              <span>Catalog Control</span>
+              <strong>Centralized</strong>
             </div>
             <div>
-              <span>Orders</span>
-              <strong>Personalized</strong>
+              <span>Order Tracking</span>
+              <strong>Role-Aware</strong>
             </div>
             <div>
-              <span>Insights</span>
-              <strong>User-based</strong>
+              <span>Access Model</span>
+              <strong>Secure Authentication</strong>
             </div>
           </div>
         </div>
+
         <div className="login-card">
           <div className="login-header">
-            <h2>{authMode === 'signup' ? 'Create account' : 'Sign in'}</h2>
+            <h2>{authMode === 'signup' ? 'Create your account' : 'Sign in to workspace'}</h2>
             <p>
               {authMode === 'signup'
-                ? 'Create a new account to continue.'
-                : 'Use your LeninKart credentials to continue.'}
+                ? 'Register with your professional email. After account creation, sign in manually.'
+                : 'Authenticate with your workspace credentials to continue.'}
             </p>
           </div>
+
           <form className="login-form" onSubmit={handleAuth}>
+            {authMode === 'signup' && (
+              <label>
+                Full Name
+                <input name="fullName" placeholder="Lenin Raj" />
+              </label>
+            )}
             <label>
-              Username or Email
-              <input name="username" placeholder="lenin@leninkart.io" />
+              Email
+              <input name="email" placeholder="lenin@leninkart.io" />
             </label>
             <label>
               Password
-              <input name="password" type="password" placeholder="••••••••" />
+              <input name="password" type="password" placeholder="********" />
             </label>
+            {authMode === 'signup' && (
+              <label>
+                Confirm Password
+                <input name="confirmPassword" type="password" placeholder="********" />
+              </label>
+            )}
+
             {authError && <div className="error">{authError}</div>}
+            {authNotice && <div className="notice">{authNotice}</div>}
+
             <button className="btn primary" type="submit" disabled={authLoading}>
               {authLoading ? 'Please wait...' : authMode === 'signup' ? 'Create account' : 'Login'}
             </button>
           </form>
+
           <div className="auth-toggle">
-            {authMode === 'signup' ? 'Already have an account?' : 'New to LeninKart?'}
+            {authMode === 'signup' ? 'Already registered?' : 'Need an account?'}
             <button
               type="button"
               className="link"
-              onClick={() => {
-                setAuthMode(authMode === 'signup' ? 'login' : 'signup');
-                setAuthError('');
-              }}
+              onClick={() => switchAuthMode(authMode === 'signup' ? 'login' : 'signup')}
             >
               {authMode === 'signup' ? 'Sign in' : 'Create account'}
             </button>
           </div>
+
           <div className="login-footer">
-            By continuing, you agree to LeninKart security guidelines.
+            By proceeding, you agree to LeninKart access control and usage policy.
           </div>
         </div>
       </div>
@@ -254,8 +310,8 @@ function App() {
     <div className="dashboard">
       <header className="topbar">
         <div>
-          <div className="brand">LeninKart - Smart Shopping</div>
-          <div className="subtitle">User-specific catalog and order tracking</div>
+          <div className="brand">LeninKart Commerce Operations</div>
+          <div className="subtitle">Authenticated product catalog and order visibility</div>
         </div>
         <div className="user-pill">
           <div>
@@ -270,29 +326,29 @@ function App() {
 
       <section className="stats-grid">
         <div className="stat-card">
-          <span>Total Users</span>
+          <span>Visible Users</span>
           <strong>{stats.users.length}</strong>
-          <small>Across orders + products</small>
+          <small>From your accessible data scope</small>
         </div>
         <div className="stat-card">
-          <span>Total Orders</span>
+          <span>Orders in Scope</span>
           <strong>{stats.totalOrders}</strong>
-          <small>Only your visibility</small>
+          <small>Filtered by authenticated access</small>
         </div>
         <div className="stat-card">
-          <span>Total Products</span>
+          <span>Products in Scope</span>
           <strong>{stats.totalProducts}</strong>
-          <small>Available to you</small>
+          <small>Visible to current user role</small>
         </div>
       </section>
 
       <section className="grid">
         <div className="panel">
           <div className="panel-head">
-            <h2>Products</h2>
+            <h2>Product Catalog</h2>
             <span className="pill">{stats.totalProducts} items</span>
           </div>
-          {products.length === 0 && <div className="empty-card">No products yet - add one below.</div>}
+          {products.length === 0 && <div className="empty-card">No products yet. Add one below.</div>}
           <div className="list">
             {products.map((p) => (
               <div key={p.id} className="card">
@@ -311,7 +367,7 @@ function App() {
             ))}
           </div>
           <div className="card form-card">
-            <h3>Add product</h3>
+            <h3>Create Product Entry</h3>
             <form className="form" onSubmit={addProduct}>
               <input name="name" placeholder="Product name" required />
               <input name="price" placeholder="Price" type="number" min="0" step="0.01" required />
@@ -323,7 +379,7 @@ function App() {
 
         <div className="panel">
           <div className="panel-head">
-            <h2>Orders</h2>
+            <h2>Order Ledger</h2>
             <span className="pill">{stats.totalOrders} orders</span>
           </div>
           {orders.length === 0 && <div className="empty-card">No orders yet.</div>}
@@ -343,7 +399,7 @@ function App() {
           </div>
 
           <div className="card">
-            <h3>User Base Insights</h3>
+            <h3>User Activity Overview</h3>
             <div className="chip-row">
               {stats.users.slice(0, 8).map((u) => (
                 <span key={u} className="chip">{u}</span>
