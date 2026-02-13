@@ -310,7 +310,7 @@ function App() {
     <div className="dashboard">
       <header className="topbar">
         <div>
-          <div className="brand">LeninKart Commerce Operations</div>
+          <div className="brand">LeninKart E-Commerce Operations</div>
           <div className="subtitle">Authenticated product catalog and order visibility</div>
         </div>
         <div className="user-pill">
