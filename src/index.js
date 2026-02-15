@@ -348,6 +348,15 @@ function App() {
             <h2>Product Catalog</h2>
             <span className="pill">{stats.totalProducts} items</span>
           </div>
+          <div className="card form-card">
+            <h3>Create Product Entry</h3>
+            <form className="form" onSubmit={addProduct}>
+              <input name="name" placeholder="Product name" required />
+              <input name="price" placeholder="Price" type="number" min="0" step="0.01" required />
+              <input name="description" placeholder="Short description" />
+              <button className="btn primary" type="submit">Add product</button>
+            </form>
+          </div>
           {products.length === 0 && <div className="empty-card">No products yet. Add one below.</div>}
           <div className="list">
             {products.map((p) => (
@@ -365,15 +374,6 @@ function App() {
                 </button>
               </div>
             ))}
-          </div>
-          <div className="card form-card">
-            <h3>Create Product Entry</h3>
-            <form className="form" onSubmit={addProduct}>
-              <input name="name" placeholder="Product name" required />
-              <input name="price" placeholder="Price" type="number" min="0" step="0.01" required />
-              <input name="description" placeholder="Short description" />
-              <button className="btn primary" type="submit">Add product</button>
-            </form>
           </div>
         </div>
 
