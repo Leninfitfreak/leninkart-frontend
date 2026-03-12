@@ -54,11 +54,30 @@ function App() {
     return () => clearInterval(iv);
   }, [session]);
 
+  function resetSession(message) {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    setSession(null);
+    setProducts([]);
+    setOrders([]);
+    setDataError('');
+    setAuthNotice('');
+    setAuthError(message || 'Your session is no longer valid. Please sign in again.');
+  }
+
+  function isUnauthorized(err) {
+    return err?.response?.status === 401;
+  }
+
   function fetchProducts() {
     api.get('/api/products')
       .then((r) => setProducts(r.data))
       .catch((err) => {
         console.error(err);
+        if (isUnauthorized(err)) {
+          resetSession('Your session expired while loading products. Please sign in again.');
+          return;
+        }
         setDataError('Products service is unavailable or you are not authorized.');
       });
   }
@@ -68,6 +87,10 @@ function App() {
       .then((r) => setOrders(r.data))
       .catch((err) => {
         console.error(err);
+        if (isUnauthorized(err)) {
+          resetSession('Your session expired while loading orders. Please sign in again.');
+          return;
+        }
         setDataError('Orders service is unavailable or you are not authorized.');
       });
   }
@@ -158,11 +181,8 @@ function App() {
   }
 
   function handleLogout() {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    setSession(null);
-    setProducts([]);
-    setOrders([]);
+    resetSession('');
+    setAuthError('');
   }
 
   function buy(id) {
@@ -170,7 +190,12 @@ function App() {
     setLoading(true);
     api.post(`/api/products/${id}/order`)
       .then(() => setTimeout(fetchOrders, 800))
-      .catch(console.error)
+      .catch((err) => {
+        console.error(err);
+        if (isUnauthorized(err)) {
+          resetSession('Your session expired before the order request was accepted. Please sign in again.');
+        }
+      })
       .finally(() => setLoading(false));
   }
 
@@ -185,7 +210,12 @@ function App() {
         fetchProducts();
         e.target.reset();
       })
-      .catch(console.error);
+      .catch((err) => {
+        console.error(err);
+        if (isUnauthorized(err)) {
+          resetSession('Your session expired before the product was created. Please sign in again.');
+        }
+      });
   }
 
   const stats = useMemo(() => {
