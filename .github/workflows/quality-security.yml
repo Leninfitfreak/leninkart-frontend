@@ -45,20 +45,14 @@ jobs:
         run: docker build -t leninkart/frontend:ci .
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: table
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: 0
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace aquasec/trivy:0.65.0 \
+            fs --severity CRITICAL --ignore-unfixed --exit-code 0 .
+
+      - name: Export image for Trivy scan
+        run: docker save leninkart/frontend:ci -o trivy-image.tar
 
       - name: Run Trivy image scan
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: leninkart/frontend:ci
-          format: table
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: 0
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" aquasec/trivy:0.65.0 \
+            image --input /workspace/trivy-image.tar --severity CRITICAL --ignore-unfixed --exit-code 0
