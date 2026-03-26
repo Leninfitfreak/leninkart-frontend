@@ -25,7 +25,7 @@ function formatCurrency(value) {
   }).format(number);
 }
 
-function App() {
+export function App() {
   const [session, setSession] = useState(() => {
     const token = localStorage.getItem(TOKEN_KEY);
     const rawUser = localStorage.getItem(USER_KEY);
@@ -455,5 +455,9 @@ function App() {
   );
 }
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);
+const rootElement = document.getElementById('root');
+
+if (rootElement) {
+  const root = ReactDOM.createRoot(rootElement);
+  root.render(<App />);
+}

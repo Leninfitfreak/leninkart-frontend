@@ -1,0 +1,64 @@
+name: Frontend Quality & Security
+
+on:
+  push:
+    branches:
+      - dev
+      - staging
+      - main
+  pull_request:
+    branches:
+      - dev
+      - staging
+      - main
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run frontend tests
+        run: npm test -- --runInBand
+
+      - name: Build frontend bundle
+        run: npm run build
+
+      - name: Run Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build container image
+        run: docker build -t leninkart/frontend:ci .
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: leninkart/frontend:ci
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: 0
