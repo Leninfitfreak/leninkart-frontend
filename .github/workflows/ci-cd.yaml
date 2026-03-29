@@ -18,7 +18,6 @@ env:
   CONTROL_REPO: deployment-poc
   CONTROL_BRANCH: main
   TAG_METADATA_FILE: config/latest_tags.yaml
-  SECRET_CONTROL_PAT: INFRA_PAT
 
 jobs:
   prepare:
@@ -73,7 +72,7 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/${{ env.CONTROL_REPO }}
           ref: ${{ env.CONTROL_BRANCH }}
-          token: ${{ secrets[env.SECRET_CONTROL_PAT] }}
+          token: ${{ secrets.PAT_TOKEN }}
           path: control-plane
 
       - name: Install yq
