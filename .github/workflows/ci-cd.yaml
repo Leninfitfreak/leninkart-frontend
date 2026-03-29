@@ -108,11 +108,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions@users.noreply.github.com"
           git add "$TAG_METADATA_FILE"
-          git commit -m "ci(tags): publish frontend ${DEPLOY_ENV} latest ${IMAGE_TAG}" || echo "No changes"
+          if git diff --cached --quiet; then
+            echo "No metadata changes to publish."
+            exit 0
+          fi
+          git commit -m "ci(tags): publish frontend ${DEPLOY_ENV} latest ${IMAGE_TAG}"
+          PUSH_OK=false
           for i in 1 2 3; do
-            git pull --rebase origin "$CONTROL_BRANCH" && git push origin "$CONTROL_BRANCH" && break
+            if git pull --rebase origin "$CONTROL_BRANCH" && git push origin "$CONTROL_BRANCH"; then
+              PUSH_OK=true
+              break
+            fi
             echo "Push retry $i failed, retrying..."
             sleep 2
           done
+          if [[ "$PUSH_OK" != "true" ]]; then
+            echo "Failed to publish latest tag metadata to ${CONTROL_REPO}/${CONTROL_BRANCH} after 3 attempts." >&2
+            exit 1
+          fi
         env:
           IMAGE_TAG: ${{ needs.build_image.outputs.image_tag }}
