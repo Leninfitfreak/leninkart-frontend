@@ -18,6 +18,10 @@ env:
   CONTROL_REPO: deployment-poc
   CONTROL_BRANCH: main
   TAG_METADATA_FILE: config/latest_tags.yaml
+  TRIVY_VERSION: 0.65.0
+  TRIVY_TIMEOUT: 15m
+  TRIVY_GATE_SEVERITY: CRITICAL
+  TRIVY_REPORT_SEVERITY: HIGH,CRITICAL
 
 jobs:
   prepare:
@@ -36,19 +40,141 @@ jobs:
     outputs:
       image_tag: ${{ needs.prepare.outputs.image_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate SonarQube configuration
+        shell: bash
+        env:
+          SONAR_HOST_URL_VAR: ${{ vars.SONAR_HOST_URL }}
+          SONAR_HOST_URL_SECRET: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          SONAR_HOST_URL="${SONAR_HOST_URL_VAR:-}"
+          if [[ -z "$SONAR_HOST_URL" ]]; then
+            SONAR_HOST_URL="${SONAR_HOST_URL_SECRET:-}"
+          fi
+          if [[ -z "$SONAR_HOST_URL" ]]; then
+            echo "SONAR_HOST_URL is not configured." >&2
+            exit 1
+          fi
+          if [[ -z "${SONAR_TOKEN:-}" ]]; then
+            echo "SONAR_TOKEN is not configured." >&2
+            exit 1
+          fi
+          echo "SONAR_HOST_URL=$SONAR_HOST_URL" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        env:
+          CI: true
+        run: npm test -- --watchAll=false
+
+      - name: Run SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Await SonarQube quality gate
+        shell: bash
+        env:
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPORT_FILE="$(find . -path '*/.scannerwork/report-task.txt' | head -n 1)"
+          if [[ -z "$REPORT_FILE" ]]; then
+            echo "Unable to locate SonarQube report-task.txt" >&2
+            exit 1
+          fi
+          CE_TASK_URL="$(grep '^ceTaskUrl=' "$REPORT_FILE" | cut -d= -f2-)"
+          ANALYSIS_ID=""
+          for _ in $(seq 1 60); do
+            RESPONSE="$(curl -sf -u "${SONAR_TOKEN}:" "$CE_TASK_URL")"
+            STATUS="$(python -c "import json,sys; print(json.load(sys.stdin)['task']['status'])" <<< "$RESPONSE")"
+            if [[ "$STATUS" == "SUCCESS" ]]; then
+              ANALYSIS_ID="$(python -c "import json,sys; print(json.load(sys.stdin)['task'].get('analysisId',''))" <<< "$RESPONSE")"
+              break
+            fi
+            if [[ "$STATUS" == "FAILED" || "$STATUS" == "CANCELED" ]]; then
+              echo "SonarQube background task finished with status: $STATUS" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          if [[ -z "$ANALYSIS_ID" ]]; then
+            echo "Timed out waiting for SonarQube analysis completion." >&2
+            exit 1
+          fi
+          QG_RESPONSE="$(curl -sf -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL%/}/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}")"
+          QG_STATUS="$(python -c "import json,sys; print(json.load(sys.stdin)['projectStatus']['status'])" <<< "$QG_RESPONSE")"
+          echo "Quality gate status: $QG_STATUS"
+          if [[ "$QG_STATUS" != "OK" ]]; then
+            echo "SonarQube quality gate failed with status: $QG_STATUS" >&2
+            exit 1
+          fi
+
+      - name: Run Trivy filesystem scan report
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace aquasec/trivy:${TRIVY_VERSION} \
+            fs --scanners vuln --timeout ${TRIVY_TIMEOUT} --skip-version-check \
+            --severity ${TRIVY_REPORT_SEVERITY} --ignore-unfixed --exit-code 0 .
+
+      - name: Enforce Trivy filesystem gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace aquasec/trivy:${TRIVY_VERSION} \
+            fs --scanners vuln --timeout ${TRIVY_TIMEOUT} --skip-version-check \
+            --severity ${TRIVY_GATE_SEVERITY} --ignore-unfixed --exit-code 1 .
 
       - name: Login to Docker Hub
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | \
           docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build & Push Frontend Image
+
+      - name: Build container image
+        shell: bash
         run: |
+          set -euo pipefail
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.image_tag }}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           docker build -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "Published image: $IMAGE"
+          docker save "$IMAGE" -o trivy-image.tar
+
+      - name: Run Trivy image scan report
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "${{ github.workspace }}:/workspace" aquasec/trivy:${TRIVY_VERSION} \
+            image --input /workspace/trivy-image.tar --timeout ${TRIVY_TIMEOUT} --skip-version-check \
+            --severity ${TRIVY_REPORT_SEVERITY} --ignore-unfixed --exit-code 0
+
+      - name: Enforce Trivy image gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "${{ github.workspace }}:/workspace" aquasec/trivy:${TRIVY_VERSION} \
+            image --input /workspace/trivy-image.tar --timeout ${TRIVY_TIMEOUT} --skip-version-check \
+            --severity ${TRIVY_GATE_SEVERITY} --ignore-unfixed --exit-code 1
+
+      - name: Push Docker image
+        run: docker push "$IMAGE"
 
   publish_latest_tag_metadata:
     runs-on: ubuntu-latest
