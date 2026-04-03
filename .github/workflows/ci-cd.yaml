@@ -100,9 +100,15 @@ jobs:
             exit 1
           fi
           CE_TASK_URL="$(grep '^ceTaskUrl=' "$REPORT_FILE" | cut -d= -f2-)"
+          SONAR_BASIC_AUTH="$(python - <<'PY'
+import base64
+import os
+print(base64.b64encode(f"{os.environ['SONAR_TOKEN']}:".encode()).decode())
+PY
+)"
           ANALYSIS_ID=""
           for _ in $(seq 1 60); do
-            RESPONSE="$(curl -sf -u "${SONAR_TOKEN}:" "$CE_TASK_URL")"
+            RESPONSE="$(curl -sf -H "Authorization: Basic ${SONAR_BASIC_AUTH}" "$CE_TASK_URL")"
             STATUS="$(python -c "import json,sys; print(json.load(sys.stdin)['task']['status'])" <<< "$RESPONSE")"
             if [[ "$STATUS" == "SUCCESS" ]]; then
               ANALYSIS_ID="$(python -c "import json,sys; print(json.load(sys.stdin)['task'].get('analysisId',''))" <<< "$RESPONSE")"
@@ -118,7 +124,7 @@ jobs:
             echo "Timed out waiting for SonarQube analysis completion." >&2
             exit 1
           fi
-          QG_RESPONSE="$(curl -sf -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL%/}/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}")"
+          QG_RESPONSE="$(curl -sf -H "Authorization: Basic ${SONAR_BASIC_AUTH}" "${SONAR_HOST_URL%/}/api/qualitygates/project_status?analysisId=${ANALYSIS_ID}")"
           QG_STATUS="$(python -c "import json,sys; print(json.load(sys.stdin)['projectStatus']['status'])" <<< "$QG_RESPONSE")"
           echo "Quality gate status: $QG_STATUS"
           if [[ "$QG_STATUS" != "OK" ]]; then
