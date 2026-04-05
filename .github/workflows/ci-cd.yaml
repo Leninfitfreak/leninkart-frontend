@@ -100,12 +100,7 @@ jobs:
             exit 1
           fi
           CE_TASK_URL="$(grep '^ceTaskUrl=' "$REPORT_FILE" | cut -d= -f2-)"
-          SONAR_BASIC_AUTH="$(python - <<'PY'
-import base64
-import os
-print(base64.b64encode(f"{os.environ['SONAR_TOKEN']}:".encode()).decode())
-PY
-)"
+          SONAR_BASIC_AUTH="$(printf '%s' "${SONAR_TOKEN}:" | base64 | tr -d '\n')"
           ANALYSIS_ID=""
           for _ in $(seq 1 60); do
             RESPONSE="$(curl -sf -H "Authorization: Basic ${SONAR_BASIC_AUTH}" "$CE_TASK_URL")"
