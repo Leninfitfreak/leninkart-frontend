@@ -83,8 +83,23 @@ export function App() {
   }
 
   function fetchOrders() {
-    api.get('/api/orders')
-      .then((r) => setOrders(r.data))
+    const token = localStorage.getItem(TOKEN_KEY);
+    fetch(`/api/orders?_ts=${Date.now()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: 'no-store',
+    })
+      .then(async (response) => {
+        if (response.status === 401) {
+          const unauthorized = new Error('Unauthorized');
+          unauthorized.response = { status: 401 };
+          throw unauthorized;
+        }
+        if (!response.ok) {
+          throw new Error(`Orders request failed: ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((data) => setOrders(Array.isArray(data) ? data : []))
       .catch((err) => {
         console.error(err);
         if (isUnauthorized(err)) {
